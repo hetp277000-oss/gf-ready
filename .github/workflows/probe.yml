@@ -1,0 +1,22 @@
+name: speed probe
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        flags: [a, b, c]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm i --no-save --no-audit --no-fund puppeteer-core@24 >/dev/null; nproc; free -g
+      - run: node probe.js
+        env:
+          FLAGS: ${{ matrix.flags }}
