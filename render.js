@@ -57,8 +57,8 @@ const clean = (s) => String(s || "").replace(BAN, "").replace(/\(\s*\)|\[\s*\]/g
   const t2 = Date.now();
   await p.click("#make-ai");
   let last = "";
-  for (let i = 0; i < 720; i++) { await sleep(5000); const st = await p.evaluate(() => ({ n: window.__blobs.length, pt: (document.getElementById("progress-text") || {}).textContent, msg: (document.querySelector(".x-status") || {}).textContent }));
-    if (st.n) break; const s2 = JSON.stringify(st).slice(0, 200); if (s2 !== last && i % 6 == 0) { log("..", s2); last = s2; } if (i === 719) throw new Error("render timeout"); }
+  for (let i = 0; i < 1800; i++) { await sleep(5000); const st = await p.evaluate(() => ({ n: window.__blobs.length, pt: (document.getElementById("progress-text") || {}).textContent, msg: (document.querySelector(".x-status") || {}).textContent }));
+    if (st.n) break; const s2 = JSON.stringify(st).slice(0, 200); if (s2 !== last && i % 6 == 0) { log("..", s2); last = s2; } if (i === 1799) throw new Error("render timeout"); }
   const renderSec = (Date.now() - t2) / 1000; log("video ready", Math.round(renderSec) + "s");
   // pull the file out in 8 MB slices
   const size = await p.evaluate(() => { window.__vb = window.__blobs[window.__blobs.length - 1]; return window.__vb.size; });
