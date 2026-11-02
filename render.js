@@ -15,7 +15,7 @@ async function gh(extra) {
   const r = await fetch(API, { method: "POST", headers: { "content-type": "application/json", "user-agent": "gf-ready-render" }, body: JSON.stringify({ op: "gh", oidc: await oidc(), ...extra }) });
   const j = await r.json(); if (!j.ok) throw new Error("auth refused: " + r.status + " " + (j.error || "")); return j;
 }
-const BAN = /times\s*of\s*india|timesofindia|\btoi\b|reuters|\bani\b|associated press|\bap news\b|\bcnn\b|\bbbc\b|fox news|abc news|\bnbc\b|\bcbs\b|al jazeera|ndtv|india today|\bwion\b|republic tv|c-span|sky news/gi;
+const BAN = /times\s*of\s*india|timesofindia|\btoi\b|reuters|\bani\b|associated press|\bap news\b|\bcnn\b|\bbbc\b|fox news|abc news|\bnbc\b|\bcbs\b|al jazeera|ndtv|india today|\bwion\b|republic tv|c-span|sky news|bloomberg|\bbbg\b|cnbc|msnbc|the guardian|new york times|\bnyt\b|washington post/gi;
 const clean = (s) => String(s || "").replace(BAN, "").replace(/\(\s*\)|\[\s*\]/g, "").replace(/[ \t]{2,}/g, " ").replace(/\s+([,.!?])/g, "$1").trim();
 (async () => {
   const T0 = Date.now(); fs.mkdirSync(OUT, { recursive: true });
@@ -70,7 +70,7 @@ const clean = (s) => String(s || "").replace(BAN, "").replace(/\(\s*\)|\[\s*\]/g
   const meta = await p.evaluate(async () => { try { if (typeof drawThumb === "function") await drawThumb(); } catch (e) {} await new Promise((r) => setTimeout(r, 1500));
     const v = (i) => (document.getElementById(i) || {}).value || "";
     return { title: v("yt-title"), desc: v("yt-desc"), tags: v("yt-tags"), thumb: document.getElementById("thumb").toDataURL("image/jpeg", 0.88), type: window.__vb.type }; });
-  meta.title = clean(meta.title); meta.desc = clean(meta.desc);
+  meta.title = clean(meta.title); meta.desc = clean(meta.desc).replace(/last 24 hours/gi, "last " + WIN + " hours");
   meta.tags = meta.tags.split(",").map((t) => t.trim()).filter((t) => t && !new RegExp(BAN.source, "i").test(t)).join(", ");
   meta.stories = stories.map(clean); meta.slot = slot; meta.len = +LEN; meta.win = +WIN; meta.t = Date.now(); meta.fp = fp; meta.cr = cr.slice(0, 1500);
   fs.writeFileSync(OUT + "/meta.json", JSON.stringify(meta));
