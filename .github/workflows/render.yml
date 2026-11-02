@@ -35,7 +35,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.slots != '[]'
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 170
     strategy:
       fail-fast: false
       max-parallel: 12
