@@ -54,8 +54,10 @@ jobs:
           node-version: 22
       - name: tools
         run: |
-          npm i --no-save --no-audit --no-fund puppeteer-core@24 >/dev/null
-          google-chrome --version; ffmpeg -version | head -1
+          npm i --no-save --no-audit --no-fund puppeteer-core@24 >/dev/null &
+          (command -v ffmpeg >/dev/null || (sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg >/dev/null)) &
+          wait
+          google-chrome --version; ffmpeg -hide_banner -version | head -1; ffprobe -hide_banner -version | head -1
       - name: render on the site
         run: node render.js "$SLOT"
       - name: encode + encrypt
