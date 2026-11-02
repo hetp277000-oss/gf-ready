@@ -17,7 +17,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const sec = (t) => +((t - T0) / 1000).toFixed(1);
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), "+" + sec(Date.now()) + "s", ...a);
 const stats = { group: G, t0: new Date(T0).toISOString(), seen: SEEN ? new Date(SEEN).toISOString() : null, steps: {} };
-const step = (k) => (stats.steps[k] = sec(Date.now()));
+const step = (k) => { stats.steps[k] = sec(Date.now()); log("step", k); };
 fs.mkdirSync(OUT, { recursive: true });
 // ffmpeg arrives in the background while Chrome works (apt is slow; it is only needed at the end)
 const ffReady = new Promise((res) => { try { execFileSync("bash", ["-c", "command -v ffmpeg"]); return res(); } catch (e) {}
@@ -28,9 +28,13 @@ async function gh(extra) { const r = await fetch(API, { method: "POST", headers:
 const BAN = /times\s*of\s*india|timesofindia|\btoi\b|reuters|\bani\b|associated press|\bap news\b|\bcnn\b|\bbbc\b|fox news|abc news|\bnbc\b|\bcbs\b|al jazeera|ndtv|india today|\bwion\b|republic tv|c-span|sky news|bloomberg|cnbc|msnbc|the guardian|new york times|\bnyt\b|washington post|global\s*flash/gi;
 const clean = (s) => String(s || "").replace(BAN, "").replace(/\(\s*\)|\[\s*\]/g, "").replace(/[ \t]{2,}/g, " ").replace(/\s+([,.!?])/g, "$1").replace(/^\s*[–|-]\s*/, "").trim();
 const DATE = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "Asia/Kolkata" });
-let browser, K;
+let K; const browsers = [];
+const LAUNCH = { executablePath: process.env.CHROME || "/usr/bin/google-chrome", headless: true, protocolTimeout: 3600e3,
+  args: ["--no-sandbox", "--disable-dev-shm-usage", "--autoplay-policy=no-user-gesture-required", "--disable-gpu", "--window-size=1280,900", "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows"] };
+// Each worker is its own Chrome (its own foreground page), so no tab is ever throttled as a background tab.
 async function openApp(label) {
-  const p = await browser.newPage();
+  const br = await puppeteer.launch(LAUNCH); browsers.push(br);
+  const p = (await br.pages())[0] || (await br.newPage()); p.label = label;
   await p.emulate({ viewport: { width: 1280, height: 900, deviceScaleFactor: 1, isMobile: true, hasTouch: true }, userAgent: "Mozilla/5.0 (Linux; Android 14; SM-E146B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36" });
   p.errs = []; p.on("pageerror", (e) => p.errs.push(label + ": " + String(e.message).slice(0, 160)));
   p.on("console", (m) => { const t = m.text(); if (/error|fail/i.test(t) && p.errs.length < 40) p.errs.push(label + " console: " + t.slice(0, 160)); });
@@ -56,8 +60,9 @@ async function pull(p, file) { // the page's last blob -> file, 8 MB at a time
 async function ghApi(p, opt) { const r = await fetch("https://api.github.com/repos/" + REPO + p, { ...opt, headers: { Authorization: "Bearer " + process.env.GH_TOKEN, Accept: "application/vnd.github+json", "User-Agent": "gf-ready", ...(opt && opt.headers) } }); return r; }
 (async () => {
   const { k } = await gh({}); K = k; console.log("::add-mask::" + k);
-  browser = await puppeteer.launch({ executablePath: process.env.CHROME || "/usr/bin/google-chrome", headless: true, protocolTimeout: 3600e3,
-    args: ["--no-sandbox", "--disable-dev-shm-usage", "--autoplay-policy=no-user-gesture-required", "--disable-gpu", "--window-size=1280,900", "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows"] });
+  // watchdog: progress every 20 s; a stuck job ends itself (so its log is kept) instead of running on
+  const dog = setInterval(async () => { const st = []; for (const br of browsers) { try { const pg = (await br.pages())[0]; st.push(await Promise.race([pg.evaluate(() => (document.getElementById("progress-text") || {}).textContent + " | " + (document.getElementById("status-text") || {}).textContent), sleep(3000).then(() => "busy")])); } catch (e) { st.push("x " + e.message.slice(0, 40)); } } log("..", JSON.stringify(st).slice(0, 600)); if (Date.now() - T0 > (+process.env.MAXMIN || 14) * 60e3) { log("FATAL watchdog: too slow, giving up", JSON.stringify(stats.steps)); process.exit(1); } }, 20000);
+  dog.unref();
   // main tab + helper tabs open together
   const helpersP = Promise.all(Array.from({ length: PAGES - 1 }, (_, i) => openApp("tab" + (i + 1))));
   const p = await openApp("main"); step("appOpen");
@@ -126,7 +131,7 @@ async function ghApi(p, opt) { const r = await fetch("https://api.github.com/rep
   const buf = fs.readFileSync(OUT + "/v.mp4"), dur = +probe.format.duration;
   Object.assign(stats, { frames: n, dur, bytes: buf.length, mbps: +((buf.length * 8) / dur / 1e6).toFixed(2), video: vs.codec_name + " " + vs.width + "x" + vs.height, audio: as && as.codec_name, parts: partStats.sort((a, b) => a.i - b.i), errors: tabs.flatMap((t) => t.errs).slice(0, 40) });
   log("video", JSON.stringify({ bytes: buf.length, dur, mbps: stats.mbps }));
-  await browser.close().catch(() => {});
+  await Promise.all(browsers.map((br) => br.close().catch(() => {})));
   // one encrypted copy per slot (each slot branch holds exactly one video)
   const ids = [];
   for (const slot of G.slots) {
