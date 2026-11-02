@@ -1,0 +1,99 @@
+name: ready videos
+# Started by the backend watcher (workflow_dispatch) the moment it sees a new upload; the cron is only a safety net.
+# A newer dispatch cancels an older run still in flight (newest news wins); a scheduled run waits instead.
+on:
+  workflow_dispatch:
+    inputs:
+      slots:
+        description: "all | list like 5_6,10_3 (length_window)"
+        default: "all"
+      force:
+        description: "1 = render even if the stories did not change"
+        default: "0"
+      seen:
+        description: "first-seen time (ms) of the newest upload (set by the watcher, for timing)"
+        default: ""
+  schedule:
+    - cron: "41 */3 * * *"
+concurrency:
+  group: gf-ready
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
+permissions:
+  contents: write
+  id-token: write
+  actions: write
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      groups: ${{ steps.p.outputs.groups }}
+    steps:
+      - id: p
+        env:
+          IN: ${{ github.event.inputs.slots }}
+          FORCE: ${{ github.event.inputs.force }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node -e '
+          const fs=require("fs"), crypto=require("crypto"), inp=(process.env.IN||"all").trim();
+          const ALL=["5_3","5_6","5_12","10_3","10_6","10_12"];
+          const want=/^\d/.test(inp)?inp.split(",").map(x=>x.trim()).filter(x=>ALL.includes(x)):ALL;
+          (async()=>{
+            const L=(await (await fetch("https://hetnews-ai-api.vercel.app/api/gf/media?feed=latest&t="+Date.now(),{headers:{Origin:"https://globalflashnews.surge.sh"}})).json()).lists;
+            const groups={};
+            for (const s of want) { const l=L[s]; if(!l||!l.ids.length) { console.log(s,"no list"); continue; }
+              const fp=crypto.createHash("sha256").update(JSON.stringify([l.ids,l.spare,l.win])).digest("hex").slice(0,16);
+              let live=null; try { const r=await fetch("https://api.github.com/repos/"+process.env.GITHUB_REPOSITORY+"/contents/latest.json?ref=s-"+s,{headers:{Authorization:"Bearer "+process.env.GH_TOKEN,Accept:"application/vnd.github.raw","User-Agent":"gf"}}); if(r.ok) live=await r.json(); } catch(e){}
+              if (live && live.fp===fp && process.env.FORCE!=="1") { console.log(s,"unchanged, skip"); continue; }
+              const [len,win]=s.split("_"); (groups[fp]=groups[fp]||{len,win,fp,slots:[]}).slots.push(s); }
+            const g=Object.values(groups); console.log(JSON.stringify(g));
+            fs.appendFileSync(process.env.GITHUB_OUTPUT,"groups="+JSON.stringify(g)+"\n");
+          })().catch(e=>{console.log(e);process.exit(1)});'
+  make:
+    needs: plan
+    if: needs.plan.outputs.groups != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        group: ${{ fromJSON(needs.plan.outputs.groups) }}
+    env:
+      GROUP: ${{ toJSON(matrix.group) }}
+      SEEN: ${{ github.event.inputs.seen }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: tools
+        run: npm i --no-save --no-audit --no-fund puppeteer-core@24 >/dev/null; google-chrome --version
+      - name: make the video on the site
+        run: node ready.js
+      - name: publish (one orphan branch per slot, old video replaced)
+        run: node publish.js
+      - name: summary
+        if: always()
+        run: |
+          echo '### ${{ join(matrix.group.slots, ' ') }}' >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat out/stats.json out/published.json 2>/dev/null >> "$GITHUB_STEP_SUMMARY" || true; echo '```' >> "$GITHUB_STEP_SUMMARY"
+  tidy:
+    needs: make
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: remove stale branches and artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node -e '
+          const R="https://api.github.com/repos/"+process.env.GITHUB_REPOSITORY, H={Authorization:"Bearer "+process.env.GH_TOKEN,Accept:"application/vnd.github+json","User-Agent":"gf"};
+          const KEEP=new Set(["main","feed","s-5_3","s-5_6","s-5_12","s-10_3","s-10_6","s-10_12"]);
+          (async()=>{
+            const br=await (await fetch(R+"/branches?per_page=100",{headers:H})).json();
+            for (const b of br) if (!KEEP.has(b.name)) { const r=await fetch(R+"/git/refs/heads/"+b.name,{method:"DELETE",headers:H}); console.log("deleted branch",b.name,r.status); }
+            const a=await (await fetch(R+"/actions/artifacts?per_page=100",{headers:H})).json();
+            for (const x of a.artifacts||[]) { const r=await fetch(R+"/actions/artifacts/"+x.id,{method:"DELETE",headers:H}); console.log("deleted artifact",x.name,r.status); }
+            const c=await (await fetch(R+"/actions/caches?per_page=100",{headers:H})).json();
+            for (const x of c.actions_caches||[]) { const r=await fetch(R+"/actions/caches/"+x.id,{method:"DELETE",headers:H}); console.log("deleted cache",x.key,r.status); }
+          })();'
