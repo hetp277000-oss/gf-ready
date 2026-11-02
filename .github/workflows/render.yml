@@ -1,0 +1,92 @@
+name: render ready videos
+on:
+  schedule:
+    - cron: "20 */3 * * *"
+  workflow_dispatch:
+    inputs:
+      slots:
+        description: "due | all | list like 2_3,5_6 (length_window)"
+        default: "due"
+      force:
+        description: "1 = render even if the stories did not change"
+        default: "0"
+permissions:
+  contents: write
+  id-token: write
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      slots: ${{ steps.p.outputs.slots }}
+    steps:
+      - id: p
+        env:
+          IN: ${{ github.event.inputs.slots }}
+        run: |
+          node -e '
+          const fs=require("fs"), d=new Date(), inp=(process.env.IN||"due").trim();
+          const h=Math.round((d.getUTCHours()+d.getUTCMinutes()/60-0.33)/3)*3%24;
+          let s;
+          if (/^\d/.test(inp)) s=inp.split(",").map(x=>x.trim()).filter(x=>/^(2|5|10)_(3|6|12|24)$/.test(x));
+          else { const w=inp==="all"?[3,6,12,24]:[3,...(h%6===0?[6]:[]),...(h%12===0?[12]:[]),...(h===0?[24]:[])]; s=[].concat(...w.map(x=>[2,5,10].map(l=>l+"_"+x))); }
+          console.log("UTC slot hour",h,"->",s.join(" "));
+          fs.appendFileSync(process.env.GITHUB_OUTPUT,"slots="+JSON.stringify(s)+"\n");'
+  render:
+    needs: plan
+    if: needs.plan.outputs.slots != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      max-parallel: 12
+      matrix:
+        slot: ${{ fromJSON(needs.plan.outputs.slots) }}
+    concurrency:
+      group: slot-${{ matrix.slot }}
+      cancel-in-progress: false
+    env:
+      SLOT: ${{ matrix.slot }}
+      FORCE: ${{ github.event.inputs.force }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: tools
+        run: |
+          npm i --no-save --no-audit --no-fund puppeteer-core@24 >/dev/null
+          google-chrome --version; ffmpeg -version | head -1
+      - name: render on the site
+        run: node render.js "$SLOT"
+      - name: encode + encrypt
+        if: hashFiles('out/skip') == ''
+        run: node pack.js "$SLOT"
+      - name: publish
+        if: hashFiles('out/skip') == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ID=$(node -p 'require("./out/info.json").id')
+          cd pub
+          git init -q; git config user.name "gf-ready-bot"; git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -q --orphan "s-$SLOT"; git add -A; git commit -qm "video $ID"
+          A=$(git rev-parse HEAD)
+          node -e 'const fs=require("fs");const i=JSON.parse(fs.readFileSync("../out/info.json"));i.sha=process.argv[1];fs.writeFileSync("latest.json",JSON.stringify(i));' "$A"
+          git add latest.json; git commit -qm "latest $ID"
+          git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/s-$SLOT"
+          echo "A=$A" >> "$GITHUB_ENV"; echo "ID=$ID" >> "$GITHUB_ENV"
+      - name: warm jsDelivr
+        if: hashFiles('out/skip') == ''
+        run: |
+          N=$(node -p 'require("./out/info.json").n'); fail=0
+          for f in m $(seq 0 $((N-1))); do
+            r=$(curl -s -o /dev/null -w "%{http_code} %{size_download} %{time_total}" "https://cdn.jsdelivr.net/gh/${GITHUB_REPOSITORY}@${A}/${ID}/${f}.bin"); echo "$f.bin $r"
+            case "$r" in 200*) ;; *) fail=1;; esac
+          done
+          exit $fail
+      - name: summary
+        if: always()
+        run: |
+          echo "### $SLOT" >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat out/stats.json out/info.json 2>/dev/null >> "$GITHUB_STEP_SUMMARY" || true; [ -f out/skip ] && echo "skipped: same stories" >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat out/stats.json 2>/dev/null || true
