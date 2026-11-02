@@ -82,7 +82,7 @@ jobs:
         run: |
           N=$(node -p 'require("./out/info.json").n'); fail=0
           for f in m $(seq 0 $((N-1))); do
-            r=$(curl -s -o /dev/null -w "%{http_code} %{size_download} %{time_total}" "https://cdn.jsdelivr.net/gh/${GITHUB_REPOSITORY}@${A}/${ID}/${f}.bin"); echo "$f.bin $r"
+            for try in 1 2 3 4; do r=$(curl -s -o /dev/null -w "%{http_code} %{size_download} %{time_total}" "https://cdn.jsdelivr.net/gh/${GITHUB_REPOSITORY}@${A}/${ID}/${f}.bin"); echo "$f.bin try $try: $r"; case "$r" in 200*) break;; esac; sleep $((try*10)); done
             case "$r" in 200*) ;; *) fail=1;; esac
           done
           exit $fail
