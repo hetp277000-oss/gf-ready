@@ -10,7 +10,7 @@ async function oidc() { const r = await fetch(process.env.ACTIONS_ID_TOKEN_REQUE
   const probe = JSON.parse(execFileSync("ffprobe", ["-v", "error", "-show_streams", "-show_format", "-of", "json", OUT + "/raw.mp4"]).toString());
   const a = probe.streams.find((s) => s.codec_type === "audio"), dur = +probe.format.duration;
   const t0 = Date.now();
-  execFileSync("ffmpeg", ["-y", "-v", "error", "-i", OUT + "/raw.mp4", "-map", "0:v:0", "-map", "0:a:0?", "-c:v", "libvpx-vp9", "-b:v", "0", "-crf", process.env.CRF || "33", "-deadline", "good", "-cpu-used", process.env.CPU || "4", "-row-mt", "1", "-tile-columns", "2", "-threads", "4", "-g", "96", "-pix_fmt", "yuv420p",
+  execFileSync("ffmpeg", ["-y", "-v", "error", "-i", OUT + "/raw.mp4", "-map", "0:v:0", "-map", "0:a:0?", "-c:v", "libvpx-vp9", "-b:v", "0", "-crf", process.env.CRF || "33", "-deadline", "good", "-cpu-used", process.env.CPU || "6", "-row-mt", "1", "-tile-columns", "2", "-threads", String(require("os").cpus().length), "-g", "96", "-pix_fmt", "yuv420p",
     ...(a && a.codec_name === "opus" ? ["-c:a", "copy"] : ["-c:a", "libopus", "-b:a", "128k", "-ar", "48000", "-ac", "2"]), "-movflags", "+faststart", OUT + "/v.mp4"], { stdio: "inherit" });
   const encSec = (Date.now() - t0) / 1000, buf = fs.readFileSync(OUT + "/v.mp4");
   // fidelity check vs the site's own render (first 60 s): SSIM 1.0 = identical
