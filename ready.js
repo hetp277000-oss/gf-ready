@@ -45,7 +45,7 @@ async function openApp(label) {
   await p.evaluateOnNewDocument((gap, date) => { try { if (location.hostname === "globalflashnews.surge.sh") { localStorage.setItem("gf-key", "GF-"); localStorage.setItem("gf-tab", "make"); localStorage.removeItem("gf-channel"); } } catch (e) {}
     window.GF_RR = { blank: true, gap, date }; }, GAP, DATE);
   await p.goto(SITE, { waitUntil: "load", timeout: 90000 });
-  await p.waitForFunction(() => window.GFR && document.getElementById("get-news"), { timeout: 90000 });
+  await p.waitForFunction(() => window.GFR && document.getElementById("get-news"), { timeout: 90000, polling: 500 });
   return p;
 }
 async function pull(p, file) { // the page's last blob -> file, 8 MB at a time
