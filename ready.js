@@ -19,9 +19,14 @@ const log = (...a) => console.log(new Date().toISOString().slice(11, 19), "+" + 
 const stats = { group: G, t0: new Date(T0).toISOString(), seen: SEEN ? new Date(SEEN).toISOString() : null, steps: {} };
 const step = (k) => { stats.steps[k] = sec(Date.now()); log("step", k); };
 fs.mkdirSync(OUT, { recursive: true });
-// ffmpeg arrives in the background while Chrome works (apt is slow; it is only needed at the end)
-const ffReady = new Promise((res) => { try { execFileSync("bash", ["-c", "command -v ffmpeg"]); return res(); } catch (e) {}
-  const p = spawn("bash", ["-c", "sudo apt-get update -qq >/dev/null 2>&1; sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg >/dev/null 2>&1"], { stdio: "ignore" }); p.on("exit", () => res()); });
+// ffmpeg arrives in the background while Chrome works (only needed once the frames are drawn). A static build from
+// GitHub releases takes ~15 s; apt (the old way) sometimes took 7+ minutes, so it is only the fallback.
+const FFDIR = path.resolve("ffbin");
+const ffReady = new Promise((res) => { try { execFileSync("bash", ["-c", "command -v ffmpeg"]); return res("system"); } catch (e) {}
+  const t = Date.now(), dl = spawn("bash", ["-c", "set -e; mkdir -p '" + FFDIR + "'; cd '" + FFDIR + "'; curl -fsSL --retry 3 --max-time 120 https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz | tar -xJ --strip-components=2 --wildcards '*/bin/ffmpeg' '*/bin/ffprobe'; ./ffmpeg -hide_banner -encoders 2>/dev/null | grep -q libx264"], { stdio: "ignore" });
+  dl.on("exit", (c) => { if (!c) { process.env.PATH = FFDIR + ":" + process.env.PATH; stats.ffmpeg = { how: "static", sec: (Date.now() - t) / 1000 }; return res("static"); }
+    const p = spawn("bash", ["-c", "sudo apt-get update -qq >/dev/null 2>&1; sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg >/dev/null 2>&1"], { stdio: "ignore" });
+    p.on("exit", () => { stats.ffmpeg = { how: "apt", sec: (Date.now() - t) / 1000 }; res("apt"); }); }); });
 const run = (cmd, args) => new Promise((res, rej) => { const p = spawn(cmd, args, { stdio: ["ignore", "ignore", "pipe"] }); let e = ""; p.stderr.on("data", (d) => (e = (e + d).slice(-2000))); p.on("exit", (c) => (c ? rej(new Error(cmd + " " + c + " " + e)) : res())); });
 async function oidc() { const r = await fetch(process.env.ACTIONS_ID_TOKEN_REQUEST_URL + "&audience=gf-ready", { headers: { Authorization: "bearer " + process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN } }); return (await r.json()).value; }
 async function gh(extra) { const r = await fetch(API, { method: "POST", headers: { "content-type": "application/json", "user-agent": "gf-ready-render" }, body: JSON.stringify({ op: "gh", oidc: await oidc(), ...extra }) }); const j = await r.json(); if (!j.ok) throw new Error("auth refused " + r.status); return j; }
