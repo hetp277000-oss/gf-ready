@@ -123,7 +123,7 @@ async function ghApi(p, opt) { const r = await fetch("https://api.github.com/rep
   const audioFile = await audioP;
   step("frames");
   fs.writeFileSync(OUT + "/all.h264", Buffer.concat(ranges.map((_, i) => fs.readFileSync(OUT + "/part" + i + ".h264"))));
-  await run("ffmpeg", ["-y", "-v", "error", "-framerate", "24", "-i", OUT + "/all.h264", "-i", audioFile, "-map", "0:v:0", "-map", "1:a:0", "-c", "copy", "-movflags", "+faststart", OUT + "/v.mp4"]);
+  await run("ffmpeg", ["-y", "-v", "error", "-framerate", "24", "-i", OUT + "/all.h264", "-i", audioFile, "-map", "0:v:0", "-map", "1:a:0", "-c", "copy", "-t", (n / 24).toFixed(3), "-movflags", "+faststart", OUT + "/v.mp4"]);
   const probe = JSON.parse(execFileSync("ffprobe", ["-v", "error", "-count_packets", "-show_streams", "-show_format", "-of", "json", OUT + "/v.mp4"]).toString());
   const vs = probe.streams.find((s) => s.codec_type === "video"), as = probe.streams.find((s) => s.codec_type === "audio");
   if (+vs.nb_read_packets !== n) throw new Error("frame count " + vs.nb_read_packets + " != " + n);
