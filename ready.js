@@ -11,7 +11,7 @@ const puppeteer = require("puppeteer-core");
 const API = "https://hetnews-ai-api.vercel.app/api/gf/unlock", SITE = "https://globalflashnews.surge.sh/";
 const REPO = process.env.GITHUB_REPOSITORY || "hetp277000-oss/gf-ready";
 const G = JSON.parse(process.env.GROUP || '{"len":"5","win":"6","slots":["5_6"]}');
-const OUT = path.resolve(process.env.OUT || "out"), PUB = path.resolve(process.env.PUB || "pub"), PAGES = +(process.env.PAGES || 4), GAP = 2.4, CH = 14 << 20;
+const OUT = path.resolve(process.env.OUT || "out"), PUB = path.resolve(process.env.PUB || "pub"), PAGES = +(process.env.PAGES || 4), GAP = 2.4, CH = 14 << 20, PACK = +(process.env.PACK || 3);
 const T0 = Date.now(), SEEN = +process.env.SEEN || 0;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const sec = (t) => +((t - T0) / 1000).toFixed(1);
@@ -138,12 +138,22 @@ async function ghApi(p, opt) { const r = await fetch("https://api.github.com/rep
     const id = slot.replace("_", "-") + "-" + new Date().toISOString().replace(/[-:T]/g, "").slice(0, 12) + "-" + crypto.randomBytes(3).toString("hex");
     const j = await gh({ id }); console.log("::add-mask::" + j.vk);
     const key = Buffer.from(j.vk, "base64"), seal = (d) => { const iv = crypto.randomBytes(12), c = crypto.createCipheriv("aes-256-gcm", key, iv); return Buffer.concat([iv, c.update(d), c.final(), c.getAuthTag()]); };
-    const dir = PUB + "/" + slot + "/" + id; fs.mkdirSync(dir, { recursive: true });
-    let nc = 0; for (let o = 0; o < buf.length; o += CH) fs.writeFileSync(dir + "/" + nc++ + ".bin", seal(buf.subarray(o, o + CH)));
-    const m = { ...meta, slot, win: +slot.split("_")[1], dur, size: buf.length, n: nc, mime: "video/mp4", codec: "h264+" + (as && as.codec_name), fp: G.fp };
+    // jsDelivr serves at most 50 MB per commit, so the chunks go in packs of PACK (3 x 14 MB = 42 MB + m.bin):
+    // pack 0 + m.bin = the pointer commit (made by publish.js), every further pack = its own orphan commit made here,
+    // and m.bin says which commit holds which chunk (cb, null = the pointer commit).
+    const root = PUB + "/" + slot, dir = root + "/" + id; fs.mkdirSync(dir, { recursive: true });
+    const git = (env, ...a) => execFileSync("git", a, { cwd: env.GIT_WORK_TREE || root, env: { GIT_DIR: root + "/.git",  ...process.env, GIT_AUTHOR_NAME: "gf-ready-bot", GIT_COMMITTER_NAME: "gf-ready-bot", GIT_AUTHOR_EMAIL: "41898282+github-actions[bot]@users.noreply.github.com", GIT_COMMITTER_EMAIL: "41898282+github-actions[bot]@users.noreply.github.com", ...env }, stdio: ["ignore", "pipe", "inherit"] }).toString().trim();
+    execFileSync("git", ["init", "-q", root]);
+    let nc = 0; const cb = [], packs = [];
+    for (let o = 0; o < buf.length; o += CH) { const i = nc++, k = Math.floor(i / PACK), d = k ? root + ".p" + k + "/" + id : dir;
+      fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(d + "/" + i + ".bin", seal(buf.subarray(o, o + CH))); }
+    for (let k = 1; k * PACK < nc; k++) { const env = { GIT_WORK_TREE: root + ".p" + k, GIT_INDEX_FILE: root + "/.git/index-p" + k };
+      git(env, "add", "-A"); const tree = git(env, "write-tree"), c = git(env, "commit-tree", tree, "-m", "video " + id + " part " + k); packs.push(c); }
+    for (let i = 0; i < nc; i++) cb.push(i < PACK ? null : packs[Math.floor(i / PACK) - 1]);
+    const m = { ...meta, slot, win: +slot.split("_")[1], dur, size: buf.length, n: nc, mime: "video/mp4", codec: "h264+" + (as && as.codec_name), fp: G.fp, ...(packs.length ? { cb } : {}) };
     fs.writeFileSync(dir + "/m.bin", seal(Buffer.from(JSON.stringify(m))));
-    fs.writeFileSync(PUB + "/" + slot + "/info.json", JSON.stringify({ id, n: nc, size: buf.length, dur, t: meta.t, fp: G.fp, slot, seen: SEEN || null }));
-    ids.push({ slot, id, n: nc });
+    fs.writeFileSync(PUB + "/" + slot + ".info.json", JSON.stringify({ id, n: nc, size: buf.length, dur, t: meta.t, fp: G.fp, slot, seen: SEEN || null }));
+    ids.push({ slot, id, n: nc, cb, packs });
   }
   fs.writeFileSync(OUT + "/ids.json", JSON.stringify(ids));
   step("packed");
