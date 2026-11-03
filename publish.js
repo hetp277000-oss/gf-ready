@@ -12,8 +12,8 @@ const ENV = { ...process.env, GIT_AUTHOR_NAME: "gf-ready-bot", GIT_COMMITTER_NAM
 const sh = (cwd, ...a) => execFileSync("git", a, { cwd, env: ENV, stdio: ["ignore", "pipe", "pipe"] }).toString().trim();
 const URL_ = process.env.REMOTE || "https://x-access-token:" + TOK + "@github.com/" + REPO + ".git";
 async function push(dir, spec) { // big pushes sometimes time out (HTTP 408): retry
-  for (let t = 1; ; t++) { try { sh(dir, "-c", "http.postBuffer=524288000", "-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=60", "push", "-q", "-f", URL_, spec); return t; }
-    catch (e) { const m = String(e.stderr || e.message).replace(TOK, "***").split("\n").filter(Boolean).slice(-2).join(" | "); console.log("push", spec.replace(/^[0-9a-f]{40}/, (x) => x.slice(0, 7)), "try", t, "failed:", m.slice(0, 200)); if (t >= 4) throw new Error("push failed " + spec.split(":")[1]); await sleep(t * 10000); } }
+  for (let t = 1; ; t++) { try { sh(dir, "push", "-q", "-f", URL_, spec); return t; }
+    catch (e) { const m = String(e.stderr || e.message).replace(TOK, "***").split("\n").filter(Boolean).slice(-2).join(" | "); console.log("push", spec.replace(/^[0-9a-f]{40}/, (x) => x.slice(0, 7)), "try", t, "failed:", m.slice(0, 200)); if (t >= 4) throw new Error("push failed " + spec.split(":")[1]); await sleep(t * 5000); } }
 }
 async function serve(url) { // jsDelivr first; raw.githubusercontent is the site's fallback
   for (let t = 1; t <= 5; t++) { const r = await fetch(url).catch(() => null);
