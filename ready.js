@@ -38,7 +38,7 @@ const LAUNCH = { executablePath: process.env.CHROME || "/usr/bin/google-chrome",
   args: ["--no-sandbox", "--disable-dev-shm-usage", "--autoplay-policy=no-user-gesture-required", "--disable-gpu", "--window-size=1280,900", "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows"] };
 // Each worker is its own Chrome (its own foreground page), so no tab is ever throttled as a background tab.
 async function openApp(label) {
-  const br = await puppeteer.launch(LAUNCH); browsers.push(br);
+  let br; for (let t = 1; ; t++) { try { br = await puppeteer.launch({ ...LAUNCH, timeout: 90000 }); break; } catch (e) { console.log("chrome launch try " + t + ": " + e.message); if (t >= 3) throw e; await new Promise((r) => setTimeout(r, 3000)); } } browsers.push(br);
   const p = (await br.pages())[0] || (await br.newPage()); p.label = label;
   await p.emulate({ viewport: { width: 1280, height: 900, deviceScaleFactor: 1, isMobile: true, hasTouch: true }, userAgent: "Mozilla/5.0 (Linux; Android 14; SM-E146B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36" });
   p.errs = []; p.on("pageerror", (e) => p.errs.push(label + ": " + String(e.message).slice(0, 160)));
