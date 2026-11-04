@@ -11,7 +11,7 @@ const puppeteer = require("puppeteer-core");
 const API = "https://hetnews-ai-api.vercel.app/api/gf/unlock", SITE = "https://globalflashnews.surge.sh/";
 const REPO = process.env.GITHUB_REPOSITORY || "hetp277000-oss/gf-ready";
 const G = JSON.parse(process.env.GROUP || '{"len":"5","win":"6","slots":["5_6"]}');
-const OUT = path.resolve(process.env.OUT || "out"), PUB = path.resolve(process.env.PUB || "pub"), PAGES = +(process.env.PAGES || 4), GAP = 2.4, CH = 14 << 20, PACK = +(process.env.PACK || 3);
+const OUT = path.resolve(process.env.OUT || "out"), PUB = path.resolve(process.env.PUB || "pub"), PAGES = +(process.env.PAGES || 4), GAP = 2.4, CH = 14 << 20, PACK = +(process.env.PACK || 1);
 const T0 = Date.now(), SEEN = +process.env.SEEN || 0;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const sec = (t) => +((t - T0) / 1000).toFixed(1);
@@ -51,8 +51,8 @@ async function openApp(label) {
       return r.respond({ status: 200, contentType: "application/json", headers: { "Access-Control-Allow-Origin": "https://globalflashnews.surge.sh" }, body: JSON.stringify(body) }); }
     r.continue();
   });
-  await p.evaluateOnNewDocument((gap, date) => { try { if (location.hostname === "globalflashnews.surge.sh") { localStorage.setItem("gf-key", "GF-"); localStorage.setItem("gf-tab", "make"); localStorage.removeItem("gf-channel"); } } catch (e) {}
-    window.GF_RR = { blank: true, gap, date }; }, GAP, DATE);
+  await p.evaluateOnNewDocument((gap, date, bps) => { try { if (location.hostname === "globalflashnews.surge.sh") { localStorage.setItem("gf-key", "GF-"); localStorage.setItem("gf-tab", "make"); localStorage.removeItem("gf-channel"); } } catch (e) {}
+    window.GF_RR = { blank: true, gap, date, bps }; }, GAP, DATE, +(process.env.RAWBPS || 12e6));
   await p.goto(SITE, { waitUntil: "load", timeout: 90000 });
   await p.waitForFunction(() => window.GFR && document.getElementById("get-news"), { timeout: 90000, polling: 500 });
   return p;
@@ -92,11 +92,12 @@ async function ghApi(p, opt) { const r = await fetch("https://api.github.com/rep
   log("timeline", info.total.toFixed(2) + "s", info.frames, "frames", info.gaps.length, "name gaps");
   // title / description / tags / thumbnail exactly as the site makes them (no channel name)
   let cr = ""; try { await p.click("#cr-check"); await sleep(4000); cr = await p.evaluate(() => (document.getElementById("cr-out") || {}).innerText || ""); } catch (e) {}
-  const meta = await p.evaluate(async () => { try { if (typeof drawThumb === "function") await drawThumb(); } catch (e) {} await new Promise((r) => setTimeout(r, 800));
+  const meta = await p.evaluate(async () => { try { if (S.tagsP) await Promise.race([S.tagsP, new Promise((r) => setTimeout(r, 40000))]); } catch (e) {} try { if (typeof drawThumb === "function") await drawThumb(); } catch (e) {} await new Promise((r) => setTimeout(r, 800));
     const v = (i) => (document.getElementById(i) || {}).value || "";
-    return { title: v("yt-title"), desc: v("yt-desc"), tags: v("yt-tags"), thumb: document.getElementById("thumb").toDataURL("image/jpeg", 0.9), thumbSpot: S.thumbSpot || null, voice: opt("opt-ai-voice"), speed: rate(), win: S.newsWindow }; });
+    return { title: v("yt-title"), desc: v("yt-desc"), tags: v("yt-tags"), thumb: document.getElementById("thumb").toDataURL("image/jpeg", 0.9), thumbSpot: S.thumbSpot || null, voice: opt("opt-ai-voice"), speed: rate(), win: S.newsWindow, tagStats: S.tagStats || null }; });
   meta.title = clean(meta.title); meta.desc = clean(meta.desc);
   meta.tags = meta.tags.split(",").map((t) => t.trim()).filter((t) => t && !new RegExp(BAN.source, "i").test(t)).join(", ");
+  stats.tags = meta.tagStats; delete meta.tagStats;
   Object.assign(meta, { stories: stories.map(clean), len: +G.len, info, gap: GAP, cr: cr.slice(0, 1500), t: Date.now() });
   const snap = await p.evaluate(() => GFR.snapshot());
   fs.writeFileSync(OUT + "/snapshot.json", snap); step("snapshot");
@@ -110,8 +111,8 @@ async function ghApi(p, opt) { const r = await fetch("https://api.github.com/rep
     if (!l.same) throw new Error("timeline mismatch in tab " + (i + 1));
     if (l.miss.length) throw new Error("tab " + (i + 1) + " could not load " + l.miss.length + " files");
     stats.steps["load" + (i + 1)] = sec(Date.now()); return l; }));
-  const X264 = ["-c:v", "libx264", "-preset", process.env.X264P || "veryfast", "-crf", process.env.CRF || "24", "-g", "48", "-keyint_min", "48", "-sc_threshold", "0", "-pix_fmt", "yuv420p", "-profile:v", "high", "-f", "h264"];
-  const partStats = [];
+  const X264 = ["-c:v", "libx264", "-preset", process.env.X264P || "faster", "-crf", process.env.CRF || "20", "-g", "48", "-keyint_min", "48", "-sc_threshold", "0", "-pix_fmt", "yuv420p", "-profile:v", "high", "-f", "h264"];
+  const partStats = []; stats.enc = { x264: X264.slice(2, 6).join(" "), rawBps: +(process.env.RAWBPS || 12e6), pack: PACK };
   // range 0 is drawn by the main tab after the sound track; the others start as soon as their tab has loaded the snapshot
   await Promise.all(ranges.map(async (rg, i) => {
     const ti = i % tabs.length, tab = tabs[ti];
@@ -122,7 +123,11 @@ async function ghApi(p, opt) { const r = await fetch("https://api.github.com/rep
     partRes[i]();
     await ffReady;
     const t1 = Date.now(); await run("ffmpeg", ["-y", "-v", "error", "-i", raw, "-an", ...X264, OUT + "/part" + i + ".h264"]);
-    partStats.push({ i, frames: rg[1] - rg[0], renderSec: +(r.ms / 1000).toFixed(1), fps: +((rg[1] - rg[0]) / (r.ms / 1000)).toFixed(1), x264Sec: (Date.now() - t1) / 1000, doneAt: sec(Date.now()) });
+    const ps = { i, frames: rg[1] - rg[0], renderSec: +(r.ms / 1000).toFixed(1), fps: +((rg[1] - rg[0]) / (r.ms / 1000)).toFixed(1), x264Sec: (Date.now() - t1) / 1000, doneAt: sec(Date.now()), rawMB: +(fs.statSync(raw).size / 1048576).toFixed(1), outMB: +(fs.statSync(OUT + "/part" + i + ".h264").size / 1048576).toFixed(1) };
+    if (i === 1 && process.env.QSTAT !== "0") { // sharpness vs the tab's own high-bitrate frames: first 20 s of part 1
+      try { const q = await new Promise((res) => { const pr = spawn("ffmpeg", ["-v", "info", "-t", "20", "-r", "24", "-i", OUT + "/part" + i + ".h264", "-t", "20", "-i", raw, "-lavfi", "[0:v]setpts=N/24/TB[a];[1:v]setpts=N/24/TB,split[b][c];[a]split[d][e];[d][b]ssim;[e][c]psnr", "-f", "null", "-"], { stdio: ["ignore", "ignore", "pipe"] }); let e = ""; pr.stderr.on("data", (d) => (e += d)); pr.on("exit", () => res(e)); });
+        ps.ssim = +((q.match(/SSIM[^\n]*All:([0-9.]+)/) || [])[1] || 0); ps.psnr = +((q.match(/PSNR[^\n]*average:([0-9.inf]+)/) || [])[1] || 0); } catch (e) {} }
+    partStats.push(ps);
     fs.rmSync(raw);
   }));
   const audioFile = await audioP;
