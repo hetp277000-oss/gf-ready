@@ -111,7 +111,7 @@ async function ghApi(p, opt) { const r = await fetch("https://api.github.com/rep
     if (!l.same) throw new Error("timeline mismatch in tab " + (i + 1));
     if (l.miss.length) throw new Error("tab " + (i + 1) + " could not load " + l.miss.length + " files");
     stats.steps["load" + (i + 1)] = sec(Date.now()); return l; }));
-  const X264 = ["-c:v", "libx264", "-preset", process.env.X264P || "veryfast", "-crf", process.env.CRF || "21", "-g", "48", "-keyint_min", "48", "-sc_threshold", "0", "-pix_fmt", "yuv420p", "-profile:v", "high", "-f", "h264"];
+  const X264 = ["-c:v", "libx264", "-preset", process.env.X264P || "faster", "-crf", process.env.CRF || "20", "-tune", "film", "-x264-params", "aq-mode=3", "-g", "48", "-keyint_min", "48", "-sc_threshold", "0", "-pix_fmt", "yuv420p", "-profile:v", "high", "-f", "h264"];
   const partStats = []; stats.enc = { x264: X264.slice(2, 6).join(" "), rawBps: +(process.env.RAWBPS || 12e6), pack: PACK };
   // range 0 is drawn by the main tab after the sound track; the others start as soon as their tab has loaded the snapshot
   await Promise.all(ranges.map(async (rg, i) => {
