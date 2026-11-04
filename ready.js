@@ -51,8 +51,8 @@ async function openApp(label) {
       return r.respond({ status: 200, contentType: "application/json", headers: { "Access-Control-Allow-Origin": "https://globalflashnews.surge.sh" }, body: JSON.stringify(body) }); }
     r.continue();
   });
-  await p.evaluateOnNewDocument((gap, date, bps) => { try { if (location.hostname === "globalflashnews.surge.sh") { localStorage.setItem("gf-key", "GF-"); localStorage.setItem("gf-tab", "make"); localStorage.removeItem("gf-channel"); } } catch (e) {}
-    window.GF_RR = { blank: true, gap, date, bps }; }, GAP, DATE, +(process.env.RAWBPS || 12e6));
+  await p.evaluateOnNewDocument((gap, date, bps, voiceW) => { try { if (location.hostname === "globalflashnews.surge.sh") { localStorage.setItem("gf-key", "GF-"); localStorage.setItem("gf-tab", "make"); localStorage.removeItem("gf-channel"); } } catch (e) {}
+    window.GF_RR = { blank: true, gap, date, bps }; if (!voiceW) window.GF_VOICE_MAIN = true; }, GAP, DATE, +(process.env.RAWBPS || 12e6), process.env.VOICEW === "1");
   await p.goto(SITE, { waitUntil: "load", timeout: 90000 });
   await p.waitForFunction(() => window.GFR && document.getElementById("get-news"), { timeout: 90000, polling: 500 });
   return p;
