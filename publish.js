@@ -12,9 +12,19 @@ const ENV = { ...process.env, GIT_AUTHOR_NAME: "gf-ready-bot", GIT_COMMITTER_NAM
 const sh = (cwd, ...a) => execFileSync("git", a, { cwd, env: ENV, stdio: ["ignore", "pipe", "pipe"] }).toString().trim();
 const URL_ = process.env.REMOTE || "https://x-access-token:" + TOK + "@github.com/" + REPO + ".git";
 const shA = (cwd, ...a) => new Promise((res, rej) => { const p = spawn("git", a, { cwd, env: ENV, stdio: ["ignore", "ignore", "pipe"] }); let e = ""; p.stderr.on("data", (d) => (e = (e + d).slice(-1500))); p.on("exit", (c) => (c ? rej(Object.assign(new Error("git " + c), { stderr: e })) : res())); });
-async function push(dir, spec) { // big pushes sometimes time out (HTTP 408): retry
+async function push(dir, spec, max) { // big pushes sometimes time out (HTTP 408): retry
   for (let t = 1; ; t++) { try { await shA(dir, "push", "-q", "-f", URL_, spec); return t; }
-    catch (e) { const m = String(e.stderr || e.message).replace(TOK, "***").split("\n").filter(Boolean).slice(-2).join(" | "); console.log("push", spec.replace(/^[0-9a-f]{40}/, (x) => x.slice(0, 7)), "try", t, "failed:", m.slice(0, 200)); if (t >= 4) throw new Error("push failed " + spec.split(":")[1]); await sleep(t * 5000); } }
+    catch (e) { const m = String(e.stderr || e.message).replace(TOK, "***").split("\n").filter(Boolean).slice(-2).join(" | "); console.log("push", spec.replace(/^[0-9a-f]{40}/, (x) => x.slice(0, 7)), "try", t, "failed:", m.slice(0, 200)); if (t >= (max || 4)) throw new Error("push failed " + spec.split(":")[1]); await sleep(Math.min(40000, 5000 * 2 ** (t - 1)) + Math.random() * 3000); } }
+}
+// GitHub answers "remote rejected (failed)" when too many pushes hit the repo at once (several slot jobs x 7-14 chunk
+// pushes each): at most 3 chunk pushes at a time per job; if one still fails, everything goes up in one push.
+async function pushAll(dir, list) {
+  const tries = new Array(list.length).fill(0); let next = 0, bad = null;
+  await Promise.all([0, 1, 2].map(async () => { while (next < list.length && !bad) { const k = next++; try { tries[k] = await push(dir, list[k], 5); } catch (e) { bad = e; } } }));
+  if (!bad) return Math.max(...tries);
+  console.log("chunk pushes failed (" + bad.message + "): one push with every ref");
+  for (let t = 1; ; t++) { try { await shA(dir, "push", "-q", "-f", URL_, ...list); return 10 + t; }
+    catch (e) { console.log("single push try", t, "failed:", String(e.stderr || e.message).replace(TOK, "***").split("\n").filter(Boolean).slice(-1).join("").slice(0, 200)); if (t >= 4) throw new Error("push failed (single push)"); await sleep(15000 * t); } }
 }
 async function serve(url) { // jsDelivr first; raw.githubusercontent is the site's fallback
   for (let t = 1; t <= 5; t++) { const r = await fetch(url).catch(() => null);
@@ -35,7 +45,7 @@ async function serve(url) { // jsDelivr first; raw.githubusercontent is the site
     // every chunk commit goes up on its own connection at the same time (one push of 50+ MB was ~0.3 MB/s),
     // then B only adds latest.json on top of commits the server already has
     const tP = Date.now(), pre = [A, ...packs].map((c, k) => ({ c, ref: "w-" + slot + "-" + k }));
-    const preTries = await Promise.all(pre.map((x) => push(dir, x.c + ":refs/heads/" + x.ref)));
+    const preTries = [await pushAll(dir, pre.map((x) => x.c + ":refs/heads/" + x.ref))];
     const pushTries = Math.max(...preTries, await push(dir, B + ":refs/heads/w-" + slot));
     const pushSec = (Date.now() - tP) / 1000;
     const pushedAt = Date.now();
