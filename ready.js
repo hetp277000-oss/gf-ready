@@ -94,8 +94,9 @@ async function ghApi(p, opt) { const r = await fetch("https://api.github.com/rep
   let cr = ""; try { await p.click("#cr-check"); await sleep(4000); cr = await p.evaluate(() => (document.getElementById("cr-out") || {}).innerText || ""); } catch (e) {}
   const meta = await p.evaluate(async () => { try { if (S.tagsP) await Promise.race([S.tagsP, new Promise((r) => setTimeout(r, 40000))]); } catch (e) {} try { if (typeof drawThumb === "function") await drawThumb(); } catch (e) {} await new Promise((r) => setTimeout(r, 800));
     const v = (i) => (document.getElementById(i) || {}).value || "";
-    return { title: v("yt-title"), desc: v("yt-desc"), tags: v("yt-tags"), thumb: document.getElementById("thumb").toDataURL("image/jpeg", 0.9), thumbSpot: S.thumbSpot || null, voice: opt("opt-ai-voice"), speed: rate(), win: S.newsWindow, tagStats: S.tagStats || null }; });
+    return { title: v("yt-title"), desc: v("yt-desc"), tags: v("yt-tags"), thumb: document.getElementById("thumb").toDataURL("image/jpeg", 0.9), thumbSpot: S.thumbSpot || null, thumbStories: (() => { const u = (im) => { const x = im && (im.currentSrc || im.src); return x && /^https:/.test(x) ? x : ""; }; return picked().slice(0, 8).map((s) => ({ title: s.title || "", thumbText: s.thumbText || "", label: s.label || "", img: u(s.img), img2: u(s.img2), faces: (s.faces || []).map(u).filter(Boolean).slice(0, 2) })); })(), voice: opt("opt-ai-voice"), speed: rate(), win: S.newsWindow, tagStats: S.tagStats || null }; });
   meta.title = clean(meta.title); meta.desc = clean(meta.desc);
+  (meta.thumbStories || []).forEach((t) => { t.title = clean(t.title); t.thumbText = clean(t.thumbText); t.label = clean(t.label); }); // the Ready tab draws the thumbnail from these (site drawThumb)
   meta.tags = meta.tags.split(",").map((t) => t.trim()).filter((t) => t && !new RegExp(BAN.source, "i").test(t)).join(", ");
   stats.tags = meta.tagStats; delete meta.tagStats;
   Object.assign(meta, { stories: stories.map(clean), len: +G.len, info, gap: GAP, cr: cr.slice(0, 1500), t: Date.now() });
@@ -111,7 +112,7 @@ async function ghApi(p, opt) { const r = await fetch("https://api.github.com/rep
     if (!l.same) throw new Error("timeline mismatch in tab " + (i + 1));
     if (l.miss.length) throw new Error("tab " + (i + 1) + " could not load " + l.miss.length + " files");
     stats.steps["load" + (i + 1)] = sec(Date.now()); return l; }));
-  const X264 = ["-c:v", "libx264", "-preset", process.env.X264P || "faster", "-crf", process.env.CRF || "20", "-tune", "film", "-x264-params", "aq-mode=3", "-g", "48", "-keyint_min", "48", "-sc_threshold", "0", "-pix_fmt", "yuv420p", "-profile:v", "high", "-f", "h264"];
+  const X264 = ["-c:v", "libx264", "-preset", process.env.X264P || "faster", "-crf", process.env.CRF || "20", "-tune", "film", "-x264-params", "aq-mode=3", "-g", "48", "-keyint_min", "48", "-sc_threshold", "0", "-pix_fmt", "yuv420p", "-profile:v", "high", "-fps_mode", "passthrough", "-f", "mpegts"]; // MPEG-TS keeps each frame's PTS/DTS (raw .h264 lost them: B-frames played out of order)
   const partStats = []; stats.enc = { x264: X264.slice(2, 6).join(" "), rawBps: +(process.env.RAWBPS || 12e6), pack: PACK };
   // range 0 is drawn by the main tab after the sound track; the others start as soon as their tab has loaded the snapshot
   await Promise.all(ranges.map(async (rg, i) => {
@@ -122,18 +123,23 @@ async function ghApi(p, opt) { const r = await fetch("https://api.github.com/rep
     const raw = OUT + "/part" + i + ".mp4"; await pull(tab, raw);
     partRes[i]();
     await ffReady;
-    const t1 = Date.now(); await run("ffmpeg", ["-y", "-v", "error", "-i", raw, "-an", ...X264, OUT + "/part" + i + ".h264"]);
-    const ps = { i, frames: rg[1] - rg[0], renderSec: +(r.ms / 1000).toFixed(1), fps: +((rg[1] - rg[0]) / (r.ms / 1000)).toFixed(1), x264Sec: (Date.now() - t1) / 1000, doneAt: sec(Date.now()), rawMB: +(fs.statSync(raw).size / 1048576).toFixed(1), outMB: +(fs.statSync(OUT + "/part" + i + ".h264").size / 1048576).toFixed(1) };
+    const t1 = Date.now(); await run("ffmpeg", ["-y", "-v", "error", "-i", raw, "-an", "-vf", "setpts=(N+" + rg[0] + ")/24/TB+10/TB", ...X264, OUT + "/part" + i + ".ts"]);
+    const ps = { i, frames: rg[1] - rg[0], renderSec: +(r.ms / 1000).toFixed(1), fps: +((rg[1] - rg[0]) / (r.ms / 1000)).toFixed(1), x264Sec: (Date.now() - t1) / 1000, doneAt: sec(Date.now()), rawMB: +(fs.statSync(raw).size / 1048576).toFixed(1), outMB: +(fs.statSync(OUT + "/part" + i + ".ts").size / 1048576).toFixed(1) };
     if (i === 1 && process.env.QSTAT !== "0") { // sharpness vs the tab's own high-bitrate frames: first 20 s of part 1
-      try { const q = await new Promise((res) => { const pr = spawn("ffmpeg", ["-v", "info", "-t", "20", "-r", "24", "-i", OUT + "/part" + i + ".h264", "-t", "20", "-i", raw, "-lavfi", "[0:v]setpts=N/24/TB[a];[1:v]setpts=N/24/TB,split[b][c];[a]split[d][e];[d][b]ssim;[e][c]psnr", "-f", "null", "-"], { stdio: ["ignore", "ignore", "pipe"] }); let e = ""; pr.stderr.on("data", (d) => (e += d)); pr.on("exit", () => res(e)); });
+      try { const q = await new Promise((res) => { const pr = spawn("ffmpeg", ["-v", "info", "-t", "20", "-r", "24", "-i", OUT + "/part" + i + ".ts", "-t", "20", "-i", raw, "-lavfi", "[0:v]setpts=N/24/TB[a];[1:v]setpts=N/24/TB,split[b][c];[a]split[d][e];[d][b]ssim;[e][c]psnr", "-f", "null", "-"], { stdio: ["ignore", "ignore", "pipe"] }); let e = ""; pr.stderr.on("data", (d) => (e += d)); pr.on("exit", () => res(e)); });
         ps.ssim = +((q.match(/SSIM[^\n]*All:([0-9.]+)/) || [])[1] || 0); ps.psnr = +((q.match(/PSNR[^\n]*average:([0-9.inf]+)/) || [])[1] || 0); } catch (e) {} }
     partStats.push(ps);
     fs.rmSync(raw);
   }));
   const audioFile = await audioP;
   step("frames");
-  fs.writeFileSync(OUT + "/all.h264", Buffer.concat(ranges.map((_, i) => fs.readFileSync(OUT + "/part" + i + ".h264"))));
-  await run("ffmpeg", ["-y", "-v", "error", "-framerate", "24", "-i", OUT + "/all.h264", "-i", audioFile, "-map", "0:v:0", "-map", "1:a:0", "-c", "copy", "-t", (n / 24).toFixed(3), "-movflags", "+faststart", OUT + "/v.mp4"]);
+  fs.writeFileSync(OUT + "/all.ts", Buffer.concat(ranges.map((_, i) => fs.readFileSync(OUT + "/part" + i + ".ts"))));
+  await run("ffmpeg", ["-y", "-v", "error", "-i", OUT + "/all.ts", "-t", (n / 24).toFixed(3), "-i", audioFile, "-map", "0:v:0", "-map", "1:a:0", "-c", "copy", "-video_track_timescale", "24000", "-movflags", "+faststart", OUT + "/v.mp4"]);
+  { // every frame must sit 1/24 s after the one before it in presentation order (catches out-of-order B-frames)
+    const pts = execFileSync("ffprobe", ["-v", "error", "-select_streams", "v", "-show_entries", "packet=pts_time", "-of", "csv=p=0", OUT + "/v.mp4"], { maxBuffer: 64 << 20 }).toString().split("\n").filter((x) => x.trim() && x.trim() !== "N/A").map(Number).sort((a, b) => a - b);
+    let bad = 0; for (let k = 1; k < pts.length; k++) if (Math.abs(pts[k] - pts[k - 1] - 1 / 24) > 0.003) bad++;
+    if (pts.length !== n || bad) throw new Error("frame timing broken: " + pts.length + " frames, " + bad + " uneven steps");
+    stats.pts = { first: pts[0], last: pts[pts.length - 1] }; }
   const probe = JSON.parse(execFileSync("ffprobe", ["-v", "error", "-count_packets", "-show_streams", "-show_format", "-of", "json", OUT + "/v.mp4"]).toString());
   const vs = probe.streams.find((s) => s.codec_type === "video"), as = probe.streams.find((s) => s.codec_type === "audio");
   if (+vs.nb_read_packets !== n) throw new Error("frame count " + vs.nb_read_packets + " != " + n);
