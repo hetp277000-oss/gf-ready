@@ -33,14 +33,24 @@ async function gh(extra) { const r = await fetch(API, { method: "POST", headers:
 const BAN = /times\s*of\s*india|timesofindia|\btoi\b|reuters|\bani\b|associated press|\bap news\b|\bcnn\b|\bbbc\b|fox news|abc news|\bnbc\b|\bcbs\b|al jazeera|ndtv|india today|\bwion\b|republic tv|c-span|sky news|bloomberg|cnbc|msnbc|the guardian|new york times|\bnyt\b|washington post|global\s*flash/gi;
 const clean = (s) => String(s || "").replace(BAN, "").replace(/\(\s*\)|\[\s*\]/g, "").replace(/[ \t]{2,}/g, " ").replace(/\s+([,.!?])/g, "$1").replace(/^\s*[–|-]\s*/, "").trim();
 const DATE = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "Asia/Kolkata" });
-let K; const browsers = [];
+let K; const browsers = [], pagesAll = [];
+const RUA = process.env.RUA || "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36"; // reduced UA like real Android Chrome; Surge 403s the old exact "Android 14; SM-E146B" string since ~2026-11-05 23:30 UTC
+// The site's own files are fetched ONCE per job in node (retry on 403/429/5xx) and served to every tab from memory:
+// 4 Chrome x 6 jobs hitting Surge at once got intermittent 403s (piper-phonemize.js -> "createPiperPhonemize is not a function").
+const siteCache = new Map(), siteStat = { fetches: 0, retries: 0, fails: [] };
+function siteFile(u) { if (!siteCache.has(u)) siteCache.set(u, (async () => { for (let t = 1; ; t++) { siteStat.fetches++;
+  try { const r = await fetch(u, { headers: { "user-agent": RUA } }); const body = Buffer.from(await r.arrayBuffer());
+    if (r.ok || r.status === 404) { const h = {}; for (const k of ["content-type", "cache-control"]) if (r.headers.get(k)) h[k] = r.headers.get(k); return { status: r.status, headers: h, body }; }
+    siteStat.fails.push(r.status + " " + u.slice(SITE.length)); console.log("site " + r.status + " " + u.slice(SITE.length) + " try " + t); } catch (e) { console.log("site fetch " + e.message + " try " + t); }
+  if (t >= 7) { siteCache.delete(u); throw new Error("site file refused " + u); } siteStat.retries++; await sleep(Math.min(20000, 1500 * 2 ** (t - 1)) + Math.random() * 1500); } })()); return siteCache.get(u); }
 const LAUNCH = { executablePath: process.env.CHROME || "/usr/bin/google-chrome", headless: true, protocolTimeout: 3600e3,
   args: ["--no-sandbox", "--disable-dev-shm-usage", "--autoplay-policy=no-user-gesture-required", "--disable-gpu", "--window-size=1280,900", "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows"] };
 // Each worker is its own Chrome (its own foreground page), so no tab is ever throttled as a background tab.
 async function openApp(label) {
   let br; for (let t = 1; ; t++) { try { br = await puppeteer.launch({ ...LAUNCH, timeout: 90000 }); break; } catch (e) { console.log("chrome launch try " + t + ": " + e.message); if (t >= 3) throw e; await new Promise((r) => setTimeout(r, 3000)); } } browsers.push(br);
   const p = (await br.pages())[0] || (await br.newPage()); p.label = label;
-  await p.emulate({ viewport: { width: 1280, height: 900, deviceScaleFactor: 1, isMobile: true, hasTouch: true }, userAgent: process.env.RUA || "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36" }); // reduced UA like real Android Chrome; Surge 403s the old exact "Android 14; SM-E146B" string since 2026-11-05 23:30 UTC
+  await p.emulate({ viewport: { width: 1280, height: 900, deviceScaleFactor: 1, isMobile: true, hasTouch: true }, userAgent: RUA });
+  pagesAll.push(p); p.on("response", (r) => { if (r.status() >= 400 && p.errs.length < 40) p.errs.push(label + " HTTP " + r.status() + " " + r.url().slice(0, 120)); });
   p.errs = []; p.on("pageerror", (e) => p.errs.push(label + ": " + String(e.message).slice(0, 160)));
   p.on("console", (m) => { const t = m.text(); if (/error|fail/i.test(t) && p.errs.length < 40) p.errs.push(label + " console: " + t.slice(0, 160)); });
   await p.setRequestInterception(true);
@@ -49,6 +59,7 @@ async function openApp(label) {
     if (r.url() === API && r.method() === "POST") { let j = {}; try { j = JSON.parse(r.postData() || "{}"); } catch (e) {}
       const body = j.ping ? { ok: true, s: "gh." + sx, sx } : { ok: true, k: K, exp: 0, s: "gh." + sx, sx };
       return r.respond({ status: 200, contentType: "application/json", headers: { "Access-Control-Allow-Origin": "https://globalflashnews.surge.sh" }, body: JSON.stringify(body) }); }
+    if (r.url().startsWith(SITE) && r.method() === "GET") return siteFile(r.url().split("#")[0]).then((f) => r.respond(f)).catch(() => r.continue());
     r.continue();
   });
   await p.evaluateOnNewDocument((gap, date, bps, voiceW) => { try { if (location.hostname === "globalflashnews.surge.sh") { localStorage.setItem("gf-key", "GF-"); localStorage.setItem("gf-tab", "make"); localStorage.removeItem("gf-channel"); } } catch (e) {}
@@ -146,7 +157,7 @@ async function ghApi(p, opt) { const r = await fetch("https://api.github.com/rep
   if (+vs.nb_read_packets !== n) throw new Error("frame count " + vs.nb_read_packets + " != " + n);
   step("joined");
   const buf = fs.readFileSync(OUT + "/v.mp4"), dur = +probe.format.duration;
-  Object.assign(stats, { frames: n, dur, bytes: buf.length, mbps: +((buf.length * 8) / dur / 1e6).toFixed(2), video: vs.codec_name + " " + vs.width + "x" + vs.height, audio: as && as.codec_name, parts: partStats.sort((a, b) => a.i - b.i), errors: tabs.flatMap((t) => t.errs).slice(0, 40) });
+  stats.site = siteStat; Object.assign(stats, { frames: n, dur, bytes: buf.length, mbps: +((buf.length * 8) / dur / 1e6).toFixed(2), video: vs.codec_name + " " + vs.width + "x" + vs.height, audio: as && as.codec_name, parts: partStats.sort((a, b) => a.i - b.i), errors: tabs.flatMap((t) => t.errs).slice(0, 40) });
   log("video", JSON.stringify({ bytes: buf.length, dur, mbps: stats.mbps }));
   await Promise.all(browsers.map((br) => br.close().catch(() => {})));
   // one encrypted copy per slot (each slot branch holds exactly one video)
@@ -176,4 +187,4 @@ async function ghApi(p, opt) { const r = await fetch("https://api.github.com/rep
   step("packed");
   fs.writeFileSync(OUT + "/stats.json", JSON.stringify(stats, null, 1));
   console.log("STATS", JSON.stringify(stats));
-})().catch((e) => { console.log("FATAL", e && e.stack ? e.stack.slice(0, 600) : e); process.exit(1); });
+})().catch((e) => { console.log("FATAL", e && e.stack ? e.stack.slice(0, 600) : e); try { console.log("page errors", JSON.stringify(pagesAll.flatMap((p) => p.errs || []).slice(0, 30)), "site", JSON.stringify(siteStat)); } catch (x) {} process.exit(1); });
