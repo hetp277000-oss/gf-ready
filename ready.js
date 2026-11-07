@@ -40,7 +40,7 @@ const LAUNCH = { executablePath: process.env.CHROME || "/usr/bin/google-chrome",
 async function openApp(label) {
   let br; for (let t = 1; ; t++) { try { br = await puppeteer.launch({ ...LAUNCH, timeout: 90000 }); break; } catch (e) { console.log("chrome launch try " + t + ": " + e.message); if (t >= 3) throw e; await new Promise((r) => setTimeout(r, 3000)); } } browsers.push(br);
   const p = (await br.pages())[0] || (await br.newPage()); p.label = label;
-  await p.emulate({ viewport: { width: 1280, height: 900, deviceScaleFactor: 1, isMobile: true, hasTouch: true }, userAgent: "Mozilla/5.0 (Linux; Android 14; SM-E146B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36" });
+  await p.emulate({ viewport: { width: 1280, height: 900, deviceScaleFactor: 1, isMobile: true, hasTouch: true }, userAgent: process.env.RUA || "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36" }); // reduced UA like real Android Chrome; Surge 403s the old exact "Android 14; SM-E146B" string since 2026-11-05 23:30 UTC
   p.errs = []; p.on("pageerror", (e) => p.errs.push(label + ": " + String(e.message).slice(0, 160)));
   p.on("console", (m) => { const t = m.text(); if (/error|fail/i.test(t) && p.errs.length < 40) p.errs.push(label + " console: " + t.slice(0, 160)); });
   await p.setRequestInterception(true);
@@ -53,7 +53,8 @@ async function openApp(label) {
   });
   await p.evaluateOnNewDocument((gap, date, bps, voiceW) => { try { if (location.hostname === "globalflashnews.surge.sh") { localStorage.setItem("gf-key", "GF-"); localStorage.setItem("gf-tab", "make"); localStorage.removeItem("gf-channel"); } } catch (e) {}
     window.GF_RR = { blank: true, gap, date, bps }; if (!voiceW) window.GF_VOICE_MAIN = true; }, GAP, DATE, +(process.env.RAWBPS || 12e6), process.env.VOICEW === "1");
-  await p.goto(SITE, { waitUntil: "load", timeout: 90000 });
+  const rsp = await p.goto(SITE, { waitUntil: "load", timeout: 90000 });
+  if (rsp && rsp.status() >= 400) { const t = await p.evaluate(() => (document.body || {}).innerText || "").catch(() => ""); throw new Error("site refused the page: HTTP " + rsp.status() + " " + String(t).slice(0, 120)); }
   await p.waitForFunction(() => window.GFR && document.getElementById("get-news"), { timeout: 90000, polling: 500 });
   return p;
 }
