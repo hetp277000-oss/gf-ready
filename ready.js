@@ -38,10 +38,18 @@ const RUA = process.env.RUA || "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/5
 // The site's own files are fetched ONCE per job in node (retry on 403/429/5xx) and served to every tab from memory:
 // 4 Chrome x 6 jobs hitting Surge at once got intermittent 403s (piper-phonemize.js -> "createPiperPhonemize is not a function").
 const siteCache = new Map(), siteStat = { fetches: 0, retries: 0, fails: [] };
+// a 200 can still be a broken file (seen 2026-11-07: tabs threw "Invalid or unexpected token" on a site script)
+function badBody(u, b, cl) { const name = u.slice(SITE.length).split("?")[0];
+  if (cl && +cl !== b.length) return "length " + b.length + "/" + cl;
+  if (/\.js$/.test(name)) { try { new (require("vm").Script)(b.toString("utf8"), { filename: name }); } catch (e) { return "js " + String(e.message).slice(0, 60) + " len " + b.length + " sha1 " + crypto.createHash("sha1").update(b).digest("hex").slice(0, 12); } }
+  if (name === "" || /\.html$/.test(name)) { const t = b.toString("utf8"); if (b.length < 50000 || !/<\/html>\s*$/i.test(t)) return "html len " + b.length; }
+  return ""; }
 function siteFile(u) { if (!siteCache.has(u)) siteCache.set(u, (async () => { for (let t = 1; ; t++) { siteStat.fetches++;
-  try { const r = await fetch(u, { headers: { "user-agent": RUA } }); const body = Buffer.from(await r.arrayBuffer());
-    if (r.ok || r.status === 404) { const h = {}; for (const k of ["content-type", "cache-control"]) if (r.headers.get(k)) h[k] = r.headers.get(k); return { status: r.status, headers: h, body }; }
-    siteStat.fails.push(r.status + " " + u.slice(SITE.length)); console.log("site " + r.status + " " + u.slice(SITE.length) + " try " + t); } catch (e) { console.log("site fetch " + e.message + " try " + t); }
+  try { const r = await fetch(t > 1 ? u + (u.includes("?") ? "&" : "?") + "r=" + Date.now() : u, { headers: { "user-agent": RUA, "cache-control": "no-cache" } }); const body = Buffer.from(await r.arrayBuffer());
+    const bad = r.ok ? badBody(u, body, r.headers.get("content-encoding") ? 0 : r.headers.get("content-length")) : "";
+    if (bad) { siteStat.fails.push("bad " + u.slice(SITE.length) + " " + bad); console.log("site bad body " + u.slice(SITE.length) + " " + bad + " try " + t); }
+    else if (r.ok || r.status === 404) { const h = {}; for (const k of ["content-type", "cache-control"]) if (r.headers.get(k)) h[k] = r.headers.get(k); return { status: r.status, headers: h, body }; }
+    else { siteStat.fails.push(r.status + " " + u.slice(SITE.length)); console.log("site " + r.status + " " + u.slice(SITE.length) + " try " + t); } } catch (e) { console.log("site fetch " + e.message + " try " + t); }
   if (t >= 7) { siteCache.delete(u); throw new Error("site file refused " + u); } siteStat.retries++; await sleep(Math.min(20000, 1500 * 2 ** (t - 1)) + Math.random() * 1500); } })()); return siteCache.get(u); }
 const LAUNCH = { executablePath: process.env.CHROME || "/usr/bin/google-chrome", headless: true, protocolTimeout: 3600e3,
   args: ["--no-sandbox", "--disable-dev-shm-usage", "--autoplay-policy=no-user-gesture-required", "--disable-gpu", "--window-size=1280,900", "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows"] };
@@ -51,7 +59,7 @@ async function openApp(label) {
   const p = (await br.pages())[0] || (await br.newPage()); p.label = label;
   await p.emulate({ viewport: { width: 1280, height: 900, deviceScaleFactor: 1, isMobile: true, hasTouch: true }, userAgent: RUA });
   pagesAll.push(p); p.on("response", (r) => { if (r.status() >= 400 && p.errs.length < 40) p.errs.push(label + " HTTP " + r.status() + " " + r.url().slice(0, 120)); });
-  p.errs = []; p.on("pageerror", (e) => p.errs.push(label + ": " + String(e.message).slice(0, 160)));
+  p.errs = []; p.on("pageerror", (e) => p.errs.push(label + ": " + String(e.stack || e.message).replace(/\s+/g, " ").slice(0, 220)));
   p.on("console", (m) => { const t = m.text(); if (/error|fail/i.test(t) && p.errs.length < 40) p.errs.push(label + " console: " + t.slice(0, 160)); });
   await p.setRequestInterception(true);
   const sx = Date.now() + 8 * 3600e3;
